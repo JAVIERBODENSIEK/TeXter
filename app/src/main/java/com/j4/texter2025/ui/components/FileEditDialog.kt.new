@@ -1,0 +1,696 @@
+package com.j4.texter2025.ui.components
+
+import android.app.Activity
+import android.content.Intent
+import android.util.Log
+import android.widget.Toast
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.*
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.foundation.isSystemInDarkTheme
+import com.j4.texter2025.data.FileModel
+import com.j4.texter2025.MainActivity
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlin.math.*
+
+private object FileDialogUtils {
+    fun validateFileName(name: String): Boolean {
+        // Check if name is not blank
+        if (name.isBlank()) {
+            throw IllegalArgumentException("File name cannot be empty")
+        }
+        
+        // Check for invalid characters
+        if (name.contains(Regex("[<>:\"/\\\\|?*]"))) {
+            throw IllegalArgumentException("File name contains invalid characters")
+        }
+        
+        return true
+    }
+
+    fun ensureFileExtension(name: String): String {
+        return if (name.endsWith(".txt", ignoreCase = true)) name else "$name.txt"
+    }
+
+    fun getDisplayFileName(name: String): String {
+        return if (!MainActivity.showExtensions && name.endsWith(".txt", ignoreCase = true)) {
+            name.substringBeforeLast(".", missingDelimiterValue = name)
+        } else {
+            name
+        }
+    }
+
+    fun importFile(activity: Activity, requestCode: Int) {
+        val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+            type = "text/plain"
+        }
+        activity.startActivityForResult(intent, requestCode)
+    }
+
+    fun exportFile(fileModel: FileModel, activity: Activity, requestCode: Int) {
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TITLE, fileModel.name)
+        }
+        activity.startActivityForResult(intent, requestCode)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Suppress("UNUSED_PARAMETER", "UNUSED_VARIABLE")
+@Composable
+fun FileEditDialog(
+    file: FileModel? = null,
+    onSave: (FileModel) -> Unit,
+    onCancel: () -> Unit,
+    onDelete: (FileModel) -> Unit,
+    activity: Activity,
+    importRequestCode: Int,
+    exportRequestCode: Int,
+    existingFiles: List<String> = emptyList(),
+    initialShowFullEditor: Boolean = false,
+    customBgColor: Color? = null,
+    contentAreaColor: Color? = MaterialTheme.colorScheme.surface,
+    memoBgColor: Color? = MaterialTheme.colorScheme.surface,
+    contentAreaStyle: ContentAreaStyle = ContentAreaStyle.EDGE_TO_EDGE, // Default to edge-to-edge
+    contentAreaSize: ContentAreaSize = ContentAreaSize(0.98f, 1.0f) // Default to 98% width, full height
+) {
+    val mainActivity = activity as? MainActivity
+    if (mainActivity == null) {
+        Log.e("FileEditDialog", "Activity is not MainActivity: ${activity.javaClass.name}")
+        Toast.makeText(activity, "Error: Could not access MainActivity", Toast.LENGTH_SHORT).show()
+        onCancel()
+        return
+    }
+
+    val bgColor = customBgColor ?: MaterialTheme.colorScheme.surface
+
+    var showFullEditor by remember { mutableStateOf(initialShowFullEditor) }
+    var fullScreen by remember { mutableStateOf(false) }
+    var fileName by remember { mutableStateOf(FileDialogUtils.getDisplayFileName(file?.name ?: "")) }
+    var fileNameError by remember { mutableStateOf<String?>(null) }
+    var fileContent by remember { mutableStateOf(file?.content ?: "") }
+    var memo by remember { mutableStateOf(file?.memo ?: "") }
+    var showError by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf("") }
+    var showCaseConfirmation by remember { mutableStateOf(false) }
+    var existingCaseFile by remember { mutableStateOf("") }
+    var showMemoDropdown by remember { mutableStateOf(false) }
+    var showMemo by remember { mutableStateOf(false) }
+    var showDeleteConfirmation by remember { mutableStateOf(false) }
+    var showExitConfirmation by remember { mutableStateOf(false) }
+    var isFileNameError by remember { mutableStateOf(false) }
+    var previewScrollOffset by remember { mutableStateOf(0) }
+    var pendingEditorScrollOffset by remember { mutableStateOf<Int?>(null) }
+
+    val density = LocalDensity.current
+    val lineHeightSp = 24.sp
+    val lineHeightPx = with(density) { lineHeightSp.toPx() }
+
+    // Determine if we should animate (TypewriterText) or not
+    val showFileNameTypewriter = file != null && fileName.isNotBlank() && fileName == FileDialogUtils.getDisplayFileName(file.name)
+    val showContentTypewriter = file != null && fileContent.isNotBlank() && fileContent == file.content
+    val showMemoTypewriter = file != null && memo.isNotBlank() && memo == file.memo
+
+    // Track if there are unsaved changes
+    val initialContent = remember(file) { file?.content ?: "" }
+    val initialName = remember(file) { file?.name ?: "" }
+    val initialMemo = remember(file) { file?.memo ?: "" }
+    
+    val hasUnsavedChanges by remember(fileName, fileContent, memo, initialContent, initialName, initialMemo) {
+        derivedStateOf {
+            val nameChanged = fileName.trim() != FileDialogUtils.getDisplayFileName(initialName).trim()
+            val contentChanged = fileContent.trim() != initialContent.trim()
+            val memoChanged = memo.trim() != initialMemo.trim()
+            
+            Log.d("FileEditDialog", """
+                Change Detection:
+                Name: $fileName vs ${FileDialogUtils.getDisplayFileName(initialName)} = $nameChanged
+                Content: ${fileContent.take(20)} vs ${initialContent.take(20)} = $contentChanged
+                Memo: ${memo.take(20)} vs ${initialMemo.take(20)} = $memoChanged
+            """.trimIndent())
+            
+            nameChanged || contentChanged || memoChanged
+        }
+    }
+
+    val contentBgColor = contentAreaColor ?: MaterialTheme.colorScheme.background
+    // Use the provided memoBgColor parameter or derive from contentBgColor
+    val effectiveMemoBgColor = memoBgColor ?: contentBgColor.copy(
+        red = contentBgColor.red * 0.5f,
+        green = contentBgColor.green * 0.5f,
+        blue = contentBgColor.blue * 0.5f
+    )
+
+    fun handleExit() {
+        Log.d("FileEditDialog", "handleExit called, hasUnsavedChanges: $hasUnsavedChanges")
+        if (hasUnsavedChanges) {
+            showExitConfirmation = true
+        } else {
+            onCancel()
+        }
+    }
+
+    fun handleSave() {
+        if (fileName.trim().isEmpty()) {
+            isFileNameError = true
+            showError = true
+            errorMessage = "Please enter a file name"
+            return
+        }
+        
+        try {
+            val finalName = FileDialogUtils.ensureFileExtension(fileName)
+            FileDialogUtils.validateFileName(finalName)
+            onSave(FileModel(finalName, fileContent, memo, file?.id, keepBothFiles = false))
+            onCancel()
+        } catch (e: IllegalArgumentException) {
+            fileNameError = e.message
+            showError = true
+            errorMessage = e.message ?: "Invalid file name"
+        } catch (e: Exception) {
+            showError = true
+            errorMessage = e.message ?: "Failed to save file"
+        }
+    }
+
+    if (showExitConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showExitConfirmation = false },
+            title = { Text("Save Changes?") },
+            text = { Text("Do you want to save your changes before exiting?") },
+            confirmButton = {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TextButton(
+                        onClick = { 
+                            showExitConfirmation = false
+                            onCancel()
+                        }
+                    ) {
+                        Text("Don't Save")
+                    }
+                    Button(
+                        onClick = {
+                            try {
+                                val finalName = FileDialogUtils.ensureFileExtension(fileName)
+                                FileDialogUtils.validateFileName(finalName)
+                                onSave(FileModel(finalName, fileContent, memo, file?.id, keepBothFiles = false))
+                                showExitConfirmation = false
+                                onCancel()
+                            } catch (e: IllegalArgumentException) {
+                                showError = true
+                                errorMessage = e.message ?: "Invalid file name"
+                            } catch (e: Exception) {
+                                showError = true
+                                errorMessage = e.message ?: "Failed to save file"
+                            }
+                        }
+                    ) {
+                        Text("Save")
+                    }
+                }
+            }
+        )
+    }
+
+    if (showCaseConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showCaseConfirmation = false },
+            title = { Text("File with similar name exists") },
+            text = { 
+                Column {
+                    Text("A file named '$existingCaseFile' already exists.")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Do you want to replace the existing file or keep both with a numbered suffix?")
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showCaseConfirmation = false
+                        // Keep both files with numbered suffix
+                        try {
+                            val finalName = FileDialogUtils.ensureFileExtension(fileName)
+                            FileDialogUtils.validateFileName(finalName)
+                            onSave(FileModel(finalName, fileContent, memo, file?.id, keepBothFiles = true))
+                            onCancel()
+                        } catch (e: Exception) {
+                            showError = true
+                            errorMessage = e.message ?: "Failed to save file"
+                        }
+                    }
+                ) {
+                    Text("Keep Both")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showCaseConfirmation = false
+                        // Replace existing file
+                        try {
+                            val finalName = FileDialogUtils.ensureFileExtension(fileName)
+                            FileDialogUtils.validateFileName(finalName)
+                            onSave(FileModel(finalName, fileContent, memo, file?.id, keepBothFiles = false))
+                            onCancel()
+                        } catch (e: Exception) {
+                            showError = true
+                            errorMessage = e.message ?: "Failed to save file"
+                        }
+                    }
+                ) {
+                    Text("Replace")
+                }
+            }
+        )
+    }
+
+    val editorScrollState = rememberScrollState()
+    // Treat 100% x 100% as true full-screen (legacy edge-to-edge behaviour)
+    val isFullScreen = contentAreaSize.widthPercent >= 0.999f && contentAreaSize.heightPercent >= 0.999f
+
+    Dialog(
+        onDismissRequest = { handleExit() },
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = if (!isFullScreen) {
+                Modifier
+                    .fillMaxWidth(0.9f) // Use 90% of screen width
+                    .fillMaxHeight(0.8f) // Use 80% of screen height
+                    .padding(8.dp) // Reduced padding for more content space
+            } else {
+                // For full-screen (100 %) we fill the whole window like the old Edge-to-Edge mode
+                Modifier
+                    .fillMaxSize()
+                    .padding(0.dp) // No padding in full-screen mode
+            },
+            shape = if (isFullScreen) RoundedCornerShape(0.dp) else RoundedCornerShape(16.dp),
+            color = bgColor,
+            tonalElevation = 2.dp
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize()
+            ) {
+                // Header with title and actions
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(
+                            start = if (isFullScreen) 4.dp else 16.dp,
+                            end = if (isFullScreen) 4.dp else 16.dp,
+                            top = if (isFullScreen) 0.dp else 16.dp,
+                            bottom = if (isFullScreen) 4.dp else 16.dp
+                        ),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (file == null) "Create New File" else "Edit File",
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Share button
+                        IconButton(
+                            onClick = {
+                                val sendIntent = Intent().apply {
+                                    action = Intent.ACTION_SEND
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_TEXT, fileContent)
+                                    putExtra(Intent.EXTRA_SUBJECT, fileName)
+                                }
+                                val shareIntent = Intent.createChooser(sendIntent, "Share file")
+                                activity.startActivity(shareIntent)
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Share,
+                                contentDescription = "Share file"
+                            )
+                        }
+                        // Save to device storage button
+                        IconButton(
+                            onClick = {
+                                FileDialogUtils.exportFile(
+                                    FileModel(fileName, fileContent, memo),
+                                    activity,
+                                    exportRequestCode
+                                )
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.KeyboardArrowDown,
+                                contentDescription = "Save to device storage"
+                            )
+                        }
+                        // Full screen toggle button
+                        IconButton(onClick = { fullScreen = !fullScreen }) {
+                            Icon(
+                                imageVector = if (fullScreen) Icons.Filled.KeyboardArrowDown else Icons.Filled.KeyboardArrowUp,
+                                contentDescription = if (fullScreen) "Exit Full Screen" else "Full Screen"
+                            )
+                        }
+                        // Close button
+                        IconButton(onClick = { handleExit() }) {
+                            Icon(Icons.Filled.Close, contentDescription = "Close")
+                        }
+                    }
+                }
+                // Content area with dynamic height
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .background(contentBgColor)
+                        .verticalScroll(editorScrollState)
+                        .padding(16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                    ) {
+                        // File name field (hide in fullScreen for distraction-free, but keep accessible via a floating bar if needed)
+                        if (!fullScreen) {
+                            OutlinedTextField(
+                                value = fileName,
+                                onValueChange = { fileName = it },
+                                label = { Text("File Name") },
+                                singleLine = true,
+                                isError = showError || fileNameError != null,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                                ),
+                                textStyle = LocalTextStyle.current.copy(
+                                    color = if (showError || fileNameError != null)
+                                        MaterialTheme.colorScheme.error
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 16.dp)
+                            )
+                            if (showError || fileNameError != null) {
+                                Text(
+                                    text = if (showError) errorMessage else fileNameError!!,
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(start = 16.dp, bottom = 8.dp)
+                                )
+                            }
+                        }
+                        // Content field (scrollable, editable OutlinedTextField)
+                        // Drag handle indicator for main content area - exactly like FullScreenEditor
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 0.dp, bottom = 0.dp)
+                                .height(4.dp)
+                                .align(Alignment.CenterHorizontally)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .width(40.dp)
+                                    .height(4.dp)
+                                    .align(Alignment.Center)
+                                    .background(
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
+                                        shape = RoundedCornerShape(2.dp)
+                                    )
+                            )
+                        }
+                        
+                        // Content area with styling matching FullScreenEditor
+                        Surface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth(),
+                            color = contentBgColor,
+                            tonalElevation = 6.dp,
+                            shape = MaterialTheme.shapes.medium
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(8.dp)
+                            ) {
+                                BasicTextField(
+                                    value = fileContent,
+                                    onValueChange = { fileContent = it },
+                                    textStyle = MaterialTheme.typography.bodyLarge.copy(
+                                        fontFamily = FontFamily.Monospace,
+                                        lineHeight = 24.sp,
+                                        color = MaterialTheme.colorScheme.onBackground
+                                    ),
+                                    modifier = Modifier.fillMaxSize(),
+                                    decorationBox = { innerTextField ->
+                                        Box {
+                                            if (fileContent.isEmpty()) {
+                                                Text(
+                                                    "Enter text content here",
+                                                    style = MaterialTheme.typography.bodyLarge.copy(
+                                                        fontFamily = FontFamily.Monospace,
+                                                        lineHeight = 24.sp
+                                                    ),
+                                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                                )
+                                            }
+                                            innerTextField()
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                        
+                        // Memo section with toggle - exactly match FullScreenEditor style
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 0.dp)
+                                .height(32.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(
+                                onClick = { showMemo = !showMemo },
+                                modifier = Modifier
+                                    .padding(0.dp)
+                                    .height(28.dp),
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                            ) {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        if (showMemo) Icons.Filled.KeyboardArrowUp 
+                                        else Icons.Filled.KeyboardArrowDown,
+                                        contentDescription = if (showMemo) "Hide memo" else "Show memo"
+                                    )
+                                    Text(if (showMemo) "Hide Memo" else "Show Memo")
+                                }
+                            }
+                            if (showError) {
+                                Text(
+                                    text = errorMessage,
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(top = 8.dp)
+                                )
+                            }
+                        }
+                        
+                        // Add proper spacing between content and memo - match FullScreenEditor
+                        if (showMemo) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                        
+                        // Animated memo field - exactly match FullScreenEditor styling
+                        AnimatedVisibility(
+                            visible = showMemo,
+                            enter = expandVertically() + fadeIn(),
+                            exit = shrinkVertically() + fadeOut()
+                        ) {
+                            // Center the memo area in the available space
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .align(Alignment.CenterHorizontally)
+                                    .padding(horizontal = 16.dp)
+                            ) {
+                                // Drag handle indicator at the top - minimal padding
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 0.dp, bottom = 0.dp)
+                                        .height(4.dp)
+                                        .align(Alignment.CenterHorizontally)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .width(40.dp)
+                                            .height(4.dp)
+                                            .align(Alignment.Center)
+                                            .background(
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
+                                                shape = RoundedCornerShape(2.dp)
+                                            )
+                                    )
+                                }
+                                
+                                // Memo content area with proper styling - match FullScreenEditor exactly
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(120.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Surface(
+                                        modifier = Modifier
+                                            .fillMaxWidth(0.98f) // Match FullScreenEditor's width percentage
+                                            .fillMaxHeight(),
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = effectiveMemoBgColor,
+                                        tonalElevation = 6.dp
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .padding(8.dp) // Exact same padding as FullScreenEditor
+                                        ) {
+                                            BasicTextField(
+                                                value = memo,
+                                                onValueChange = { memo = it },
+                                                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                                    color = MaterialTheme.colorScheme.onBackground
+                                                ),
+                                                modifier = Modifier.fillMaxSize(),
+                                                decorationBox = { innerTextField ->
+                                                    Box {
+                                                        if (memo.isEmpty()) {
+                                                            Text(
+                                                                "Enter memo here",
+                                                                style = MaterialTheme.typography.bodyMedium,
+                                                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                                            )
+                                                        }
+                                                        innerTextField()
+                                                    }
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(16.dp))
+                    }
+                }
+                // Add proper spacing before bottom bar
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                // Bottom bar with action buttons - match FullScreenEditor styling
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = contentBgColor,
+                    tonalElevation = 2.dp
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(
+                            onClick = { handleExit() }
+                        ) {
+                            Text("Cancel", style = MaterialTheme.typography.bodyLarge)
+                        }
+                        Button(
+                            onClick = {
+                                try {
+                                    val finalName = FileDialogUtils.ensureFileExtension(fileName)
+                                    FileDialogUtils.validateFileName(finalName)
+                                    onSave(FileModel(finalName, fileContent, memo, file?.id))
+                                    handleExit()
+                                } catch (e: Exception) {
+                                    showError = true
+                                    errorMessage = e.message ?: "Failed to save file"
+                                }
+                            }
+                        ) {
+                            Text("Save", style = MaterialTheme.typography.bodyLarge)
+                        }
+                        if (file != null) {
+                            TextButton(onClick = { showDeleteConfirmation = true }) {
+                                Text("Delete")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Delete confirmation dialog
+    if (showDeleteConfirmation && file != null) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirmation = false },
+            title = { Text("Delete File") },
+            text = { Text("Are you sure you want to delete '${FileDialogUtils.getDisplayFileName(file.name)}'?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDelete.invoke(file)
+                        showDeleteConfirmation = false
+                        onCancel()
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirmation = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+}

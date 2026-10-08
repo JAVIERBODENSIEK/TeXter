@@ -1,0 +1,500 @@
+package com.j4.texter2025.ui.components
+
+import android.content.Context
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
+import com.j4.texter2025.MainActivity
+import com.j4.texter2025.data.FileModel
+import com.j4.texter2025.data.SearchMethod
+import com.j4.texter2025.data.SortMethod
+import androidx.compose.animation.*
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
+import java.io.File
+import com.j4.texter2025.ui.components.FullScreenEditor
+import com.j4.texter2025.ui.components.ContentAreaStyle
+import com.j4.texter2025.ui.components.ContentAreaSize
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun FileListScreen(
+    files: List<FileModel>,
+    onFileSelect: (FileModel) -> Unit,
+    onFilesDeleted: () -> Unit = {},
+    onFileEditRequest: (FileModel?, Boolean) -> Unit, // Added for full screen editor
+    onSearch: (String, SearchMethod, Boolean) -> List<FileModel>,
+    modifier: Modifier = Modifier,
+    saveFile: (Context, FileModel) -> Unit,
+    deleteTextFile: (Context, FileModel) -> Unit,
+    contentAreaStyle: ContentAreaStyle,
+    contentAreaSize: ContentAreaSize,
+    customBgColor: Color,
+    contentAreaColor: Color? = null,
+    memoBgColor: Color? = null,
+    listAreaColor: Color? = null
+) {
+    var searchQuery by remember { mutableStateOf("") }
+    var searchMethod by remember { mutableStateOf(SearchMethod.TITLE_AND_CONTENT) }
+    var isCaseSensitive by remember { mutableStateOf(false) }
+    var displayedFiles by remember { mutableStateOf(files) }
+    var showDeleteConfirmation by remember { mutableStateOf(false) }
+    var showSnackbar by remember { mutableStateOf(false) }
+    var snackbarMessage by remember { mutableStateOf("") }
+    var currentSortMethod by remember { mutableStateOf(SortMethod.NAME_ASC) }
+    var showSortMenu by remember { mutableStateOf(false) }
+    var showDropdownMenu by remember { mutableStateOf(false) }
+    var isSelectionMode by remember { mutableStateOf(false) }
+    var selectedFiles by remember { mutableStateOf(emptySet<FileModel>()) }
+    var showFileEditDialog: FileModel? by remember { mutableStateOf(null) }
+    var showFullEditor by remember { mutableStateOf(false) }
+    var lastAccessedFile by remember { mutableStateOf<FileModel?>(null) }
+    var isCreatingNewFile by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    fun sortFiles(files: List<FileModel>, method: SortMethod): List<FileModel> {
+        return when (method) {
+            SortMethod.NAME_ASC -> files.sortedBy { it.name.lowercase() }
+            SortMethod.NAME_DESC -> files.sortedByDescending { it.name.lowercase() }
+            SortMethod.DATE_NEWEST -> files.sortedByDescending { it.lastModified }
+            SortMethod.DATE_OLDEST -> files.sortedBy { it.lastModified }
+            SortMethod.SIZE_LARGEST -> files.sortedByDescending { it.content.length }
+            SortMethod.SIZE_SMALLEST -> files.sortedBy { it.content.length }
+        }
+    }
+
+    LaunchedEffect(files, searchQuery, searchMethod, isCaseSensitive, currentSortMethod) {
+        displayedFiles = if (searchQuery.isEmpty()) {
+            sortFiles(files, currentSortMethod)
+        } else {
+            sortFiles(onSearch(searchQuery, searchMethod, isCaseSensitive), currentSortMethod)
+        }
+        selectedFiles = selectedFiles.filter { selected -> 
+            displayedFiles.any { it.id == selected.id } 
+        }.toSet()
+        isSelectionMode = selectedFiles.isNotEmpty()
+    }
+
+    // Delete confirmation dialog
+    if (showDeleteConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirmation = false },
+            title = { Text("Confirm Delete") },
+            text = { Text("Are you sure you want to delete ${selectedFiles.size} selected file(s)?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteConfirmation = false
+                        (context as? MainActivity)?.let { activity ->
+                            activity.deleteFiles(context, selectedFiles.toList())
+                            selectedFiles = emptySet()
+                            isSelectionMode = false
+                            onFilesDeleted()
+                            snackbarMessage = "Files deleted successfully"
+                            showSnackbar = true
+                        }
+                    }
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirmation = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    Scaffold(
+        modifier = modifier.fillMaxSize(),
+        topBar = {
+            Column {
+                // Search and sort bar
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("Search files...") },
+                        trailingIcon = {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                // Sort button
+                                Box {
+                                    IconButton(onClick = { showSortMenu = true }) {
+                                        Icon(Icons.Filled.MoreVert, contentDescription = "Sort options")
+                                    }
+                                    DropdownMenu(
+                                        expanded = showSortMenu,
+                                        onDismissRequest = { showSortMenu = false }
+                                    ) {
+                                        Text(
+                                            "Sort by",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            modifier = Modifier.padding(8.dp)
+                                        )
+                                        SortMethod.values().forEach { method ->
+                                            DropdownMenuItem(
+                                                text = { 
+                                                    Row(
+                                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        RadioButton(
+                                                            selected = currentSortMethod == method,
+                                                            onClick = { 
+                                                                currentSortMethod = method
+                                                                showSortMenu = false
+                                                            }
+                                                        )
+                                                        Text(method.displayName)
+                                                    }
+                                                },
+                                                onClick = { 
+                                                    currentSortMethod = method
+                                                    showSortMenu = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                                
+                                // Settings button
+                                Box {
+                                    IconButton(onClick = { showDropdownMenu = !showDropdownMenu }) {
+                                        Icon(
+                                            imageVector = if (showDropdownMenu) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                                            contentDescription = if (showDropdownMenu) "Hide options" else "Show options"
+                                        )
+                                    }
+                                    DropdownMenu(
+                                        expanded = showDropdownMenu,
+                                        onDismissRequest = { showDropdownMenu = false }
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = { Text("Show File Extensions") },
+                                            onClick = { /* no direct action */ },
+                                            trailingIcon = {
+                                                Switch(
+                                                    checked = MainActivity.showExtensions,
+                                                    onCheckedChange = { MainActivity.showExtensions = it }
+                                                )
+                                            }
+                                        )
+
+                                        DropdownMenuItem(
+                                            text = { Text("Case Sensitive Search") },
+                                            onClick = { /* no direct action */ },
+                                            trailingIcon = {
+                                                Switch(
+                                                    checked = isCaseSensitive,
+                                                    onCheckedChange = { isCaseSensitive = it }
+                                                )
+                                            }
+                                        )
+
+                                        Divider(
+                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                                            thickness = 1.dp,
+                                            modifier = Modifier.padding(vertical = 4.dp)
+                                        )
+
+                                        // --- Search Options Section ---
+                                        Text(
+                                            "Search Options",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(start = 16.dp, top = 4.dp, bottom = 4.dp)
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Case Sensitive Search") },
+                                            onClick = { /* no direct action */ },
+                                            trailingIcon = {
+                                                Switch(
+                                                    checked = isCaseSensitive,
+                                                    onCheckedChange = { isCaseSensitive = it }
+                                                )
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Search Method") },
+                                            onClick = { /* no direct action */ }
+                                        )
+                                        SearchMethod.values().forEach { method ->
+                                            DropdownMenuItem(
+                                                text = { 
+                                                    Row(
+                                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                                    ) {
+                                                        RadioButton(
+                                                            selected = searchMethod == method,
+                                                            onClick = { searchMethod = method }
+                                                        )
+                                                        Text(method.name.replace("_", " "))
+                                                    }
+                                                },
+                                                onClick = { searchMethod = method }
+                                            )
+                                        }
+                                    }
+                                }
+
+                                if (searchQuery.isNotEmpty()) {
+                                    IconButton(onClick = { searchQuery = "" }) {
+                                        Icon(Icons.Filled.Clear, contentDescription = "Clear search")
+                                    }
+                                }
+                            }
+                        }
+                    )
+                }
+            }
+        },
+        bottomBar = {
+            if (isSelectionMode) {
+                BottomAppBar {
+                    Text(
+                        "${selectedFiles.size} selected",
+                        modifier = Modifier.padding(start = 16.dp)
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
+                    
+                    // Save to Storage button
+                    IconButton(
+                        onClick = {
+                            selectedFiles.firstOrNull()?.let { file ->
+                                (context as? MainActivity)?.let { mainActivity ->
+                                    mainActivity.selectedFileForExport = file
+                                    // Remove .txt if it exists and add it back to avoid double extension
+                                    val baseFileName = file.name.removeSuffix(".txt")
+                                    mainActivity.exportLauncher.launch("$baseFileName.txt")
+                                }
+                            }
+                        },
+                        enabled = selectedFiles.size == 1
+                    ) {
+                        Icon(
+                            Icons.Filled.KeyboardArrowDown,
+                            contentDescription = "Save to Storage",
+                            tint = if (selectedFiles.size == 1) 
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            else 
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                        )
+                    }
+
+                    // Share button
+                    IconButton(
+                        onClick = {
+                            selectedFiles.firstOrNull()?.let { file ->
+                                val sendIntent = Intent().apply {
+                                    action = Intent.ACTION_SEND
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_TEXT, file.content)
+                                    putExtra(Intent.EXTRA_SUBJECT, file.name)
+                                }
+                                val shareIntent = Intent.createChooser(sendIntent, "Share file")
+                                context.startActivity(shareIntent)
+                            }
+                        },
+                        enabled = selectedFiles.size == 1
+                    ) {
+                        Icon(
+                            Icons.Filled.Share,
+                            contentDescription = "Share file",
+                            tint = if (selectedFiles.size == 1) 
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            else 
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                        )
+                    }
+
+                    IconButton(onClick = { showDeleteConfirmation = true }) {
+                        Icon(Icons.Filled.Delete, contentDescription = "Delete selected")
+                    }
+                }
+            }
+        },
+        floatingActionButton = {
+            if (!isSelectionMode) {
+                FloatingActionButton(
+                    onClick = {
+                        showFileEditDialog = null // Clear any existing file selection for dialog
+                        isCreatingNewFile = true      // Signal that we are creating a new file
+                    }
+                ) {
+                    Icon(Icons.Filled.Add, contentDescription = "Create new file")
+                }
+            }
+        }
+    ) { paddingValues ->
+        Box(modifier = Modifier.padding(paddingValues)) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = listAreaColor ?: MaterialTheme.colorScheme.surface
+            ) {
+                // File list
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    items(displayedFiles) { file ->
+                        FileListItem(
+                            file = file,
+                            isSelected = selectedFiles.contains(file),
+                            onSelect = {
+                                if (!isSelectionMode) {
+                                    onFileEditRequest(file, true) // Request FullScreenEditor
+                                } else {
+                                    selectedFiles = if (selectedFiles.contains(file)) {
+                                        selectedFiles - file
+                                    } else {
+                                        selectedFiles + file
+                                    }
+                                    if (selectedFiles.isEmpty()) {
+                                        isSelectionMode = false
+                                    }
+                                }
+                            },
+                            onEdit = {
+                                if (showFileEditDialog == null) {
+                                    onFileEditRequest(file, false) // Request FileEditDialog
+                                }
+                            },
+                            onToggleSelection = {
+                                selectedFiles = if (selectedFiles.contains(file)) {
+                                    selectedFiles - file
+                                } else {
+                                    selectedFiles + file
+                                }
+                                if (selectedFiles.isEmpty()) {
+                                    isSelectionMode = false
+                                }
+                            },
+                            showExtensions = MainActivity.showExtensions,
+                            isRecentlyAccessed = lastAccessedFile == file,
+                            isSelectionMode = isSelectionMode,
+                            onLongPress = {
+                                if (!isSelectionMode) {
+                                    isSelectionMode = true
+                                    selectedFiles = setOf(file)
+                                }
+                            },
+                            fileNameContent = if (searchQuery.isNotEmpty()) {
+                                {
+                                    TypewriterText(
+                                        text = file.name,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        autoStart = true
+                                    )
+                                }
+                            } else null,
+                            customBgColor = customBgColor // Pass the custom background color
+                        )
+                    }
+                }
+            }
+
+            // Only show FileEditDialog via pencil (edit) button
+            if (showFileEditDialog != null || isCreatingNewFile) {
+                FileEditDialog(
+                    file = showFileEditDialog,
+                    onSave = { file ->
+                        saveFile(context, file)
+                        lastAccessedFile = file
+                        showFileEditDialog = null
+                        isCreatingNewFile = false
+                    },
+                    onCancel = {
+                        lastAccessedFile = showFileEditDialog
+                        showFileEditDialog = null
+                        showFullEditor = false
+                    },
+                    onDelete = { file ->
+                        deleteTextFile(context, file)
+                        lastAccessedFile = null
+                        showFileEditDialog = null
+                        showFullEditor = false
+                        isCreatingNewFile = false
+                    },
+                    activity = context as MainActivity,
+                    importRequestCode = 0,
+                    exportRequestCode = 1,
+                    existingFiles = files.map { it.name },
+                    initialShowFullEditor = false,
+                    contentAreaStyle = contentAreaStyle,
+                    contentAreaSize = contentAreaSize,
+                    customBgColor = customBgColor,
+                    contentAreaColor = contentAreaColor,
+                    memoBgColor = memoBgColor
+                )
+            }
+
+            // Show FULL SCREEN editor when tapping entry
+            if (showFullEditor && lastAccessedFile != null) {
+                FullScreenEditor(
+                    file = lastAccessedFile!!,
+                    onSave = { file ->
+                        saveFile(context, file)
+                        lastAccessedFile = file
+                        showFullEditor = false
+                    },
+                    onCancel = {
+                        showFullEditor = false
+                    },
+                    onDelete = { file ->
+                        deleteTextFile(context, file)
+                        lastAccessedFile = null
+                        showFullEditor = false
+                    },
+                    activity = context as MainActivity,
+                    contentAreaStyle = contentAreaStyle,
+                    contentAreaSize = contentAreaSize,
+                    customBgColor = customBgColor,
+                    contentAreaColor = contentAreaColor,
+                    memoAreaColor = memoBgColor
+                )
+            }
+
+            if (showSnackbar) {
+                Snackbar(
+                    modifier = Modifier.padding(16.dp),
+                    action = {
+                        TextButton(onClick = { showSnackbar = false }) {
+                            Text("Dismiss")
+                        }
+                    }
+                ) {
+                    Text(snackbarMessage)
+                }
+            }
+        }
+    }
+}

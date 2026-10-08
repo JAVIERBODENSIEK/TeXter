@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base application theme -->
+    <style name="Theme.TeXter2025" parent="android:Theme.Material.Light.NoActionBar" />
+    
+    <!-- Splash screen theme with dark grey background -->
+    <style name="Theme.TeXter2025.Splash" parent="Theme.TeXter2025">
+        <item name="android:windowBackground">@color/splash_background</item>
+        <item name="android:statusBarColor">@color/splash_background</item>
+        <item name="android:navigationBarColor">@color/splash_background</item>
+    </style>
+</resources>

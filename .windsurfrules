@@ -1,0 +1,36 @@
+[General Development Rules]
+
+Please preserve the existing app structure, functionality, and working UI elements — including buttons, effects, and features — unless a change is logically required to support or improve the following update. When modifying or removing elements, consider the purpose behind each feature and make thoughtful decisions based on their functional relevance, not just their presence. Ensure that any related or linked features continue working correctly, but allow necessary changes to outdated or conflicting elements when they are essential to implement the update properly. All updates must include complete functionality and UI logic — not just visual placeholders or inactive components. Please prioritize meaningful behavior over superficial structure.
+
+Whenever possible, implement updates using the most effective and minimal approach. Favor simplified code structures, minimal parameters, and avoid overcomplicated gesture logic or deep state management unless truly necessary.
+
+[Optional Guidelines]
+- Maintain design consistency with current UI theme
+- Reuse existing components where possible
+- Use modern, recommended Android best practices
+
+[Saving]
+Always allow the user to name the file, auto-focus the text input, and close the keyboard after saving.
+
+[Error Handling]
+- Always implement basic error handling for user input and system operations.
+- Ensure the app does not crash due to null values, missing permissions, or unexpected user behavior.
+
+[User Interaction]
+- Use intuitive interaction patterns based on platform conventions.
+- Provide visual or haptic feedback on button presses or actions when possible.
+- Ensure keyboard or input fields auto-close when not needed.
+
+[Visual Consistency]
+- Use consistent margins, padding, and alignment across UI elements.
+- Apply the existing design style (color theme, shapes, font sizes) unless a justified improvement is needed.
+- All elements must be clearly visible and accessible in both light and dark mode.
+
+[Performance]
+- Avoid unnecessary re-renders, heavy animations, or deeply nested views unless required.
+- Use lightweight components when possible.
+
+[Recurring Stability Guard - File List Item Transparency]
+- For the known recurring issue where file-list-item photo transparency can regress over longer sessions/reopen flows, always keep or add a tiny guarded debug log around alpha read/write/apply paths when touching related logic.
+- Use low-noise logging only (for example, `Log.isLoggable("FileListItemAlpha", Log.DEBUG)` guards), and avoid unconditional spam logs.
+- Do not remove this guard unless the user explicitly requests removal.

@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">TeXter 2025</string>
+    <string name="pick_a_color">Pick a Color</string>
+    <string name="quick_palette">Quick Palette</string>
+    <string name="advanced_picker">Advanced Picker</string>
+    <string name="red">Red</string>
+    <string name="green">Green</string>
+    <string name="blue">Blue</string>
+    <string name="alpha">Alpha</string>
+    <string name="selected">Selected</string>
+</resources>
